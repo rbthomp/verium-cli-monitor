@@ -20,8 +20,7 @@ port = 4048   #! NOTE: Change port numbers to those in use by your miners
 ```
 
 
-1) Install `python3`, `pip3`, `libzmq5`, and `pyzmq` on each mining machine AND
-the machine that `monitor.py` will run on:
+1) Install `python3`, `pip3`
 ```bash
 sudo apt-get install python3 python3-pip
 ```

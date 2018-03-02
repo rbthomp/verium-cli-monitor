@@ -11,21 +11,17 @@
 #
 #! I have this script running on my LAN controller so that finding each machine
 #  on the LAN is not a problem
-import zmq
 import time
 import signal
 import threading
 import curses
+import socket
 from pathlib import Path
 
 
 #! Thread variables
 threads = []
 kill_threads = threading.Event()
-
-#! ZMQ variables
-context = zmq.Context()
-zmqsockets = []
 
 #! Display varaibles
 stdscr = curses.initscr()
@@ -75,20 +71,9 @@ def init_display():
 
 #! Define custom colors
 def init_colors():
-	curses.init_pair(7, 255, -1)
-
-
-#! Initialize zmqsockets
-def init_zmqsockets():
-	for host in hosts:
-		s = context.socket(zmq.REQ)
-		s.connect("tcp://%s:5048" % host)
-		s.setsockopt(zmq.SNDTIMEO, 5000)
-		s.setsockopt(zmq.RCVTIMEO, 5000)
-		s.setsockopt(zmq.LINGER, 1000)
-		zmqsockets.append(s)
-	return
-
+	curses.use_default_colors()
+	for i in range(0, curses.COLORS):
+		curses.init_pair(i, i, -1)
 
 #! Interrupt signal handler
 def signal_handler(signal, frame):
@@ -103,31 +88,8 @@ def kill_program():
 	for t in threads:
 		t.join()
 
-	#! Kill ZMQ stuff
-	for zmqsocket in zmqsockets:
-		zmqsocket.close()
-	context.term()
-
 	exit()
 	return
-
-
-#! Process messages from a zmqsocket
-def process_zmqmsg(host):
-	while not kill_threads.is_set():
-		time.sleep(1)
-		zmqsocket = zmqsockets[hosts.index(host)]
-
-		try:
-			zmqsocket.send_string("summary")
-			msg = zmqsocket.recv_string()
-			parse_summary_msg(host,msg)
-		except zmq.error.ZMQError as e:
-			set_host_offline(host)
-			zmq_reconnect(zmqsocket, host)
-		
-	return
-
 
 #! Change display to reflect that the host is offline
 def set_host_offline(host):
@@ -135,60 +97,22 @@ def set_host_offline(host):
 	statinfo_list[index] = (False, host)
 	return
 
-
-#! Reconnect the zmqsocket
-def zmq_reconnect(zmqsocket, host):
-	#! Disconnect existing socket
-	index = hosts.index(host)
-	zmqsocket.disconnect("tcp://%s:5048" % host)
-	zmqsockets[index] = None
-	
-	#! Reconnect the existing socket
-	new_zmqsocket = context.socket(zmq.REQ)
-	new_zmqsocket.connect("tcp://%s:5048" % host)
-	new_zmqsocket.setsockopt(zmq.SNDTIMEO, 5000)  #! Arbitrary number of seconds
-	new_zmqsocket.setsockopt(zmq.RCVTIMEO, 5000)  #! Arbitrary number of seconds
-	new_zmqsocket.setsockopt(zmq.LINGER, 1000)    #! Arbitrary number of seconds
-
-	zmqsockets[index] = new_zmqsocket
-	return
-
-
 #! Parse message received from server
-def parse_summary_msg(host, msg):
-	data_points = msg.split(";")
+def parse_summary_msg(host, summary):
 
 	#! Get the index of the host
 	index = hosts.index(host)
 
-	#! Get values
-#	host     = data_points[0].split('=')[1]
-	name     = data_points[1].split('=')[1]
-	version  = data_points[2].split('=')[1]
-	api      = data_points[3].split('=')[1]
-	algo     = data_points[4].split('=')[1]
-	cpus     = int(data_points[5].split('=')[1])
-	khps     = float(data_points[6].split('=')[1])
-	solved   = int(data_points[7].split('=')[1])
-	accepted = int(data_points[8].split('=')[1])
-	rejected = int(data_points[9].split('=')[1])
-	accpm    = float(data_points[10].split('=')[1])
-	diff     = float(data_points[11].split('=')[1])
-	cpu_temp = float(data_points[12].split('=')[1])
-	cpu_fan  = int(data_points[13].split('=')[1])
-	cpu_freq = int(data_points[14].split('=')[1])
-	uptime   = int(data_points[14].split('=')[1])   #! Uptime is in seconds
-	time_sec = int(data_points[16].split('=')[1])   #! Time is in seconds
 
 	#! Calculate hpm
-	hpm     = khps * 1000 * 60
-	total = accepted + rejected if accepted + rejected > 0 else 1
-	percent = accepted / (total) * 100
+	hpm     = summary['khps'] * 1000 * 60
+	total = summary['accepted'] + summary['rejected'] if summary['accepted'] + summary['rejected'] > 0 else 1
+	percent = summary['accepted'] / (total) * 100
 
 	#! Build the display string entry
 	#! (online, host, hpm, percent, blocks, difficulty, cpus, temp)
 	statinfo_list[index] = (
-		True, host, hpm, percent, solved, diff, cpus, cpu_temp)
+		True, host, hpm, percent, summary['solved'],summary['diff'], summary['cpus'],summary['cpu_temp'])
 	return
 
 
@@ -215,13 +139,13 @@ def get_totals_avgs():
 
 	#! Formulate Average String
 	avg_str = ("Average {0:>18.3f} H/m   {1:>6.2f}%   {2:>6}    {3:<8f}  "
-		"│ {4:>4.2f}   {5:>5.1f}°C".format(
+		"â”‚ {4:>4.2f}   {5:>5.1f}Â°C".format(
 		avg_hashrate,avg_share_percent,avg_solved_blocks,
 		avg_difficulty,avg_cpus,avg_cpu_temp))
 	
 	#! Formulate Average String
 	total_str = ("Total   {0:>18.3f} H/m   ---.--%   {1:>6}    -.------  "
-		"│ {2:>4}   ---.-°C".format(
+		"â”‚ {2:>4}   ---.-Â°C".format(
 		total_hashrate,total_solved_blocks,total_cpus))
 
 	return (total_str, avg_str)
@@ -245,11 +169,11 @@ def run_display_user_input():
 	start_y = 0
 
 	#! Print header information
-	header_win.addstr(0,0,      "  ┌─────────────────┬──────────────┬─────────┬────────┬────────────┬──────┬─────────┐")
+	header_win.addstr(0,0,      "  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”")
 	header_win.clrtoeol()
-	header_win.addstr(1,0,      "  │   Hostname/IP   │ Hashrate H/m │ Share % │ Blocks │ Difficulty │ CPUs │ Temp °C │")
+	header_win.addstr(1,0,      "  â”‚   Hostname/IP   â”‚ Hashrate H/m â”‚ Share % â”‚ Blocks â”‚ Difficulty â”‚ CPUs â”‚ Temp Â°C â”‚")
 	header_win.clrtoeol()
-	header_win.addstr(2,0,      "┌─┼─────────────────┴──────────────┴─────────┴────────┴────────────┼──────┴─────────┤")
+	header_win.addstr(2,0,      "â”Œâ”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤")
 	header_win.clrtoeol()
 	header_win.refresh()
 
@@ -311,18 +235,18 @@ def write_to_scr(hl_host):
 		
 	#! Print empty lines to fill the terminal
 	for b in range(i, hosts_height):
-		hosts_win.addstr(b,0,"│ │                                                                │                │")
+		hosts_win.addstr(b,0,"â”‚ â”‚                                                                â”‚                â”‚")
 		hosts_win.clrtoeol()
 
 	#! Calculate totals and averages
 	(total_str,avg_str) = get_totals_avgs()
-	footer_win.addstr(0,0, "├─┼────────────────────────────────────────────────────────────────┼────────────────┤")
+	footer_win.addstr(0,0, "â”œâ”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤")
 	footer_win.clrtoeol()
-	footer_win.addstr(1,0, "│ │ {0} │".format(avg_str))
+	footer_win.addstr(1,0, "â”‚ â”‚ {0} â”‚".format(avg_str))
 	footer_win.clrtoeol()
-	footer_win.addstr(2,0, "│ │ {0} │".format(total_str))
+	footer_win.addstr(2,0, "â”‚ â”‚ {0} â”‚".format(total_str))
 	footer_win.clrtoeol()
-	footer_win.addstr(3,0, "└─┴────────────────────────────────────────────────────────────────┴────────────────┘")
+	footer_win.addstr(3,0, "â””â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜")
 	footer_win.clrtoeol()
 
 	return
@@ -332,8 +256,8 @@ def write_to_scr(hl_host):
 def apply_formatting(line, statinfo, hl):
 	hosts_win = windows[1]
 
-	hl_prefix = "│>│"
-	prefix =    "│ │"
+	hl_prefix = "â”‚>â”‚"
+	prefix =    "â”‚ â”‚"
 
 	#! Host online, highlighted
 	if statinfo[0] == True and hl == True:
@@ -343,9 +267,9 @@ def apply_formatting(line, statinfo, hl):
 		hosts_win.addstr("{0:>8.3f} H/m".format(statinfo[2]), curses.A_REVERSE) #! HPM
 		hosts_win.addstr("   ", curses.A_REVERSE)
 		hosts_win.addstr("{0:>6.2f}%".format(statinfo[3]), curses.A_REVERSE)   #! Share %
-		hosts_win.addstr("   {0:>6}    {1:<8}  │ {2:>4}   ".format(
+		hosts_win.addstr("   {0:>6}    {1:<8}  â”‚ {2:>4}   ".format(
 			statinfo[4], statinfo[5], statinfo[6]), curses.A_REVERSE)
-		hosts_win.addstr("{0:>5.1f}°C ".format(statinfo[7]), curses.A_REVERSE)  #! CPU Temp
+		hosts_win.addstr("{0:>5.1f}Â°C ".format(statinfo[7]), curses.A_REVERSE)  #! CPU Temp
 
 	#! Host online, not highlighted
 	elif statinfo[0] == True and hl == False:
@@ -354,32 +278,79 @@ def apply_formatting(line, statinfo, hl):
 		hosts_win.addstr("{0:>8.3f} H/m".format(statinfo[2])) #! HPM
 		hosts_win.addstr("   ")
 		hosts_win.addstr("{0:>6.2f}%".format(statinfo[3]))   #! Share %
-		hosts_win.addstr("   {0:>6}    {1:<8}  │ {2:>4}   ".format(
+		hosts_win.addstr("   {0:>6}    {1:<8}  â”‚ {2:>4}   ".format(
 			statinfo[4], statinfo[5], statinfo[6]))
-		hosts_win.addstr("{0:>5.1f}°C ".format(statinfo[7]))  #! CPU Temp
+		hosts_win.addstr("{0:>5.1f}Â°C ".format(statinfo[7]))  #! CPU Temp
 		
 	#! Host offline, highlighted
 	elif statinfo[0] == False and hl == True:
 		hosts_win.addstr(line, 0, hl_prefix)
-		hosts_win.addstr(" {0:<15}    ----.-- H/m   ---.--%   ------    -.------  │ ----   ---.-°C ".format(statinfo[1]), curses.A_REVERSE)
+		hosts_win.addstr(" {0:<15}    ----.-- H/m   ---.--%   ------    -.------  â”‚ ----   ---.-Â°C ".format(statinfo[1]), curses.A_REVERSE)
 
 	#! host offline, non-highlighted
 	else:
 		hosts_win.addstr(line, 0, prefix)
-		hosts_win.addstr(" {0:<15}    ----.-- H/m   ---.--%   ------    -.------  │ ----   ---.-°C ".format(statinfo[1]))
+		hosts_win.addstr(" {0:<15}    ----.-- H/m   ---.--%   ------    -.------  â”‚ ----   ---.-Â°C ".format(statinfo[1]))
 		
 	
 	#! End of Line
-	hosts_win.addstr("│")
+	hosts_win.addstr("â”‚")
 	hosts_win.clrtoeol()
 
 	return
 
 
+
+def process_workermsg(host,port):
+	buffer_size = 4096
+	while not kill_threads.is_set():
+		time.sleep(1)
+
+		try:
+			#! Get data from the miners
+			s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+			s.connect((host, port))
+			s.send("summary".encode())
+			recvstr = s.recv(buffer_size).decode()
+			summary = parse_summarystr(recvstr)
+			parse_summary_msg(host,summary)
+			s.close()
+		except:
+			set_host_offline(host)
+
+	return
+
+#! Parse the thread output from the miner
+def parse_summarystr(recvstr):
+        summary = {}
+        datastr = recvstr.rsplit('|')[0]
+        summary_data_list = datastr.split(';') 
+        summary['name']     =       summary_data_list[ 0].split('=')[1]
+        summary['version']  =       summary_data_list[ 1].split('=')[1]
+        summary['api']      =       summary_data_list[ 2].split('=')[1]
+        summary['algo']     =       summary_data_list[ 3].split('=')[1]
+        summary['cpus']     = int(  summary_data_list[ 4].split('=')[1])
+        summary['khps']     = float(summary_data_list[ 5].split('=')[1])
+        summary['solved']   = int(  summary_data_list[ 6].split('=')[1])
+        summary['accepted'] = int(  summary_data_list[ 7].split('=')[1])
+        summary['rejected'] = int(  summary_data_list[ 8].split('=')[1])
+        summary['accpm']    = float(summary_data_list[ 9].split('=')[1])
+        summary['diff']     = float(summary_data_list[10].split('=')[1])
+        summary['cpu_temp'] = float(summary_data_list[11].split('=')[1])
+        summary['cpu_fan']  = int(  summary_data_list[12].split('=')[1])
+        summary['cpu_freq'] = int(  summary_data_list[13].split('=')[1])
+        summary['uptime']   = int(  summary_data_list[14].split('=')[1])
+        summary['time_sec'] = int(  summary_data_list[15].split('=')[1])
+
+        return summary
+
+
+
+
 #! Main function
 def main(stdscr):
 	kill_threads.clear()
-
+	port = 4048
 	#! Create list of hosts
 	hosts_file = open("{0}/.chosts".format(Path.home()),'r')
 	for line in hosts_file:
@@ -388,13 +359,12 @@ def main(stdscr):
 
 	#! Initialize
 	init_display()
-	init_zmqsockets()
 	signal.signal(signal.SIGINT, signal_handler)
 
 	#! Create threads and start
-	for zmqsocket in zmqsockets:
-		host = hosts[zmqsockets.index(zmqsocket)]
-		t = threading.Thread(target=process_zmqmsg, args=(host,))
+	print(hosts)
+	for host in hosts:
+		t = threading.Thread(target=process_workermsg, args=(host,port))
 		threads.append(t)
 		t.start()
 

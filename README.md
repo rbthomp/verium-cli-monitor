@@ -1,6 +1,6 @@
 Verium CLI Monitoring
 =====================
-This is a no client version of https://github.com/bezeredi/verium-cli-monitor
+This is a clientless version of https://github.com/bezeredi/verium-cli-monitor
 All credit for the display code goes to bezeredi.
 
 ![alt text](https://github.com/bezeredi/verium-cli-monitor/blob/master/cli-monitor.png "CLI Monitor Preview")
